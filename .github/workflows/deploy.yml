@@ -1,4 +1,4 @@
-name: Deploy to EC2 (docker-compose)
+name: Deploy to EC2 (docker-compose plugin)
 
 on:
   push:
@@ -16,10 +16,40 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
+
+            # --- Prepare working dir ---
             sudo mkdir -p /srv/app
             sudo chown $USER:$USER /srv/app
             cd /srv/app
 
+            # --- Ensure Docker engine & compose plugin (idempotent) ---
+            if ! command -v docker >/dev/null 2>&1; then
+              # Install Docker engine via Docker's apt repo
+              sudo apt-get update
+              sudo apt-get install -y ca-certificates curl gnupg
+              sudo install -m 0755 -d /etc/apt/keyrings
+              if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
+                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+              fi
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+                | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+              sudo apt-get update
+              sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+              sudo systemctl enable --now docker
+              sudo usermod -aG docker $USER || true
+            else
+              # Ensure compose plugin exists
+              if ! docker compose version >/dev/null 2>&1; then
+                sudo apt-get update
+                sudo apt-get install -y docker-compose-plugin
+              fi
+            fi
+
+            # Remove any stray old binary compose if present
+            sudo rm -f /usr/local/bin/docker-compose || true
+
+            # --- Sync repo ---
             if [ ! -d .git ]; then
               git clone https://github.com/SDRA123/email-scraper-verifier.git .
             else
@@ -27,16 +57,9 @@ jobs:
               git reset --hard origin/main
             fi
 
-            if ! command -v docker >/dev/null; then
-              sudo apt update && sudo apt -y install docker.io
-              sudo systemctl enable --now docker
-              sudo usermod -aG docker $USER || true
-            fi
-            if ! command -v docker-compose >/dev/null; then
-              sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.7/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-              sudo chmod +x /usr/local/bin/docker-compose
-            fi
+            # --- Build & (re)start services ---
+            docker compose pull || true
+            docker compose up -d --build --remove-orphans
 
-            docker-compose pull || true
-            docker-compose up -d --build --remove-orphans
+            # --- Housekeeping ---
             docker image prune -f || true
