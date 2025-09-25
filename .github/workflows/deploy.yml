@@ -1,59 +1,65 @@
-script: |
-  set -e
+name: Deploy to EC2 (docker-compose plugin)
 
-  # --- Prepare working dir ---
-  sudo mkdir -p /srv/app
-  sudo chown $USER:$USER /srv/app
-  cd /srv/app
+on:
+  push:
+    branches: [ "main" ]
 
-  # --- Ensure Docker apt repo is present (always add/refresh) ---
-  sudo apt-get update
-  sudo apt-get install -y ca-certificates curl gnupg
-  sudo install -m 0755 -d /etc/apt/keyrings
-  if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  fi
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
-    | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-  sudo apt-get update
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH into EC2 & deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
 
-  # --- Ensure Docker engine ---
-  if ! command -v docker >/dev/null 2>&1; then
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
-    sudo systemctl enable --now docker
-    sudo usermod -aG docker $USER || true
-  fi
+            # --- Prepare working dir ---
+            sudo mkdir -p /srv/app
+            sudo chown $USER:$USER /srv/app
+            cd /srv/app
 
-  # --- Ensure Compose (plugin preferred) ---
-  if ! docker compose version >/dev/null 2>&1; then
-    if sudo apt-get install -y docker-compose-plugin; then
-      echo "Installed docker-compose-plugin from Docker repo."
-    else
-      echo "Falling back to standalone docker-compose binary."
-      sudo rm -f /usr/local/bin/docker-compose || true
-      sudo curl -fsSL "https://github.com/docker/compose/releases/download/v2.24.7/docker-compose-$(uname -s)-$(uname -m)" \
-        -o /usr/local/bin/docker-compose
-      sudo chmod +x /usr/local/bin/docker-compose
-      # Provide a shim so 'docker compose' works via the binary
-      sudo mkdir -p /usr/local/libexec/docker/cli-plugins
-      sudo ln -sf /usr/local/bin/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
-    fi
-  fi
+            # --- Ensure Docker engine & compose plugin (idempotent) ---
+            if ! command -v docker >/dev/null 2>&1; then
+              # Install Docker engine via Docker's apt repo
+              sudo apt-get update
+              sudo apt-get install -y ca-certificates curl gnupg
+              sudo install -m 0755 -d /etc/apt/keyrings
+              if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
+                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+              fi
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+                | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-  # Remove any stray old binary that might shadow the plugin path (harmless if absent)
-  sudo rm -f /usr/local/bin/docker-compose.broken || true
+              sudo apt-get update
+              sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+              sudo systemctl enable --now docker
+              sudo usermod -aG docker $USER || true
+            else
+              # Ensure compose plugin exists
+              if ! docker compose version >/dev/null 2>&1; then
+                sudo apt-get update
+                sudo apt-get install -y docker-compose-plugin
+              fi
+            fi
 
-  # --- Sync repo ---
-  if [ ! -d .git ]; then
-    git clone https://github.com/SDRA123/email-scraper-verifier.git .
-  else
-    git fetch --all
-    git reset --hard origin/main
-  fi
+            # Remove any stray old binary compose if present
+            sudo rm -f /usr/local/bin/docker-compose || true
 
-  # --- Build & (re)start services ---
-  docker compose pull || true
-  docker compose up -d --build --remove-orphans
+            # --- Sync repo ---
+            if [ ! -d .git ]; then
+              git clone https://github.com/SDRA123/email-scraper-verifier.git .
+            else
+              git fetch --all
+              git reset --hard origin/main
+            fi
 
-  # --- Housekeeping ---
-  docker image prune -f || true
+            # --- Build & (re)start services ---
+            docker compose pull || true
+            docker compose up -d --build --remove-orphans
+
+            # --- Housekeeping ---
+            docker image prune -f || true
