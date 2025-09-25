@@ -54,9 +54,8 @@ PAGE_LOAD_TIMEOUT = int(os.getenv("GP_PAGE_LOAD_TIMEOUT", "18"))
 IDLE_AFTER_BODY = float(os.getenv("GP_IDLE_AFTER_BODY", "1.2"))
 
 SMTP_TIMEOUT = int(os.getenv("GP_SMTP_TIMEOUT", "8"))
-SMTP_HELO_DOMAIN = os.getenv("GP_SMTP_HELO_DOMAIN", "example.com")
-SMTP_MAIL_FROM = os.getenv("GP_SMTP_MAIL_FROM", f"check@{SMTP_HELO_DOMAIN}")
-
+SMTP_HELO_DOMAIN = "smtp.auroraphoton.com"
+SMTP_MAIL_FROM = "probe@auroraphoton.com"
 DO_SMTP_VERIFY = True
 DEBUG_MODE = False
 FAST_ONLY = False  # if True, never use Selenium
