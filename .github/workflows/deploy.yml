@@ -1,0 +1,42 @@
+name: Deploy to EC2 (docker-compose)
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH into EC2 & deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            sudo mkdir -p /srv/app
+            sudo chown $USER:$USER /srv/app
+            cd /srv/app
+
+            if [ ! -d .git ]; then
+              git clone https://github.com/SDRA123/email-scraper-verifier.git .
+            else
+              git fetch --all
+              git reset --hard origin/main
+            fi
+
+            if ! command -v docker >/dev/null; then
+              sudo apt update && sudo apt -y install docker.io
+              sudo systemctl enable --now docker
+              sudo usermod -aG docker $USER || true
+            fi
+            if ! command -v docker-compose >/dev/null; then
+              sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.7/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+              sudo chmod +x /usr/local/bin/docker-compose
+            fi
+
+            docker-compose pull || true
+            docker-compose up -d --build --remove-orphans
+            docker image prune -f || true
